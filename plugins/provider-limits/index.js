@@ -23,6 +23,10 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+/**
+ * OpenCode's three usage buckets in the plugin's own window vocabulary: `5h`, `week`, `month`.
+ */
+const OPENCODE_WINDOWS = { rolling: '5h', weekly: 'week', monthly: 'month' }
 /** Route path; the Client half calls exactly this. */
 const ROUTE_PATH = '/plugin/provider-limits'
 /** Route that carries the provider catalogue and the user store. */
@@ -307,7 +311,7 @@ export function apply(ctx, config = {}) {
       if (window === undefined || window === null) return []
       return [
         {
-          label: name,
+          label: OPENCODE_WINDOWS[name],
           percent: percentOf(window.percent),
           resetsAt: resetsAt(window.resetsAt),
           status: typeof window.status === 'string' ? window.status : null,
@@ -460,18 +464,23 @@ function resolveProviders(config) {
 }
 
 /**
- * Window name from a quota window's `unit` and `number`. Only the pairs observed in live
- * responses are mapped (`3:5` = a five-hour window, `6:1` = one month); anything else stays
- * unlabelled and the Client shows the provider's own label.
+ * Window name from a quota window's `unit` and `number`.
+ *
+ * The plugin speaks one vocabulary for quota windows — `5h`, `week`, `month` — whatever the
+ * provider calls its buckets, and the Client localizes those three keys. GLM Coding Plan meters
+ * tokens over a five-hour cycle and a weekly quota (140 000 credits a week on Max, with the
+ * 28 000 five-hour allowance as 20% of it); its monthly limit is about MCP tool calls, a different
+ * endpoint that is not part of this list. The live `limits[]` answer therefore carries `3:5`
+ * (hours) and `6:1` (week); any other pair stays unlabelled and the Client shows a positional name.
  * @param unit - provider time unit code.
  * @param number - amount of those units.
- * @returns a short window name such as `5h` or `1mo`, or undefined.
+ * @returns `5h`, `week`, or undefined.
  */
 function quotaWindowLabel(unit, number) {
   const amount = Number(number)
   if (!Number.isFinite(amount) || amount <= 0) return undefined
-  if (Number(unit) === 3) return `${amount}h`
-  if (Number(unit) === 6) return `${amount}mo`
+  if (Number(unit) === 3) return '5h'
+  if (Number(unit) === 6) return 'week'
   return undefined
 }
 

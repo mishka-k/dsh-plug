@@ -52,9 +52,10 @@ window.__ModuleLoader__.load({
 
     /** English strings; the host `t` takes over whenever the slot provides it. */
     const DICT = {
-      'window.rolling': '5h',
-      'window.weekly': 'week',
-      'window.monthly': 'month',
+      // One vocabulary for every provider: the Host normalizes its buckets to these three keys.
+      'window.5h': '5h',
+      'window.week': 'week',
+      'window.month': 'month',
       reset: 'reset',
       left: '{remaining} / {total} left',
       balance: '{name} balance',
