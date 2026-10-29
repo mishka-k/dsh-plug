@@ -43,6 +43,16 @@ So the plugin keeps an overlay next to the harness state, `$DSH_HOME/mcp-manager
 The first reconcile runs 150 ms after mount, because patch rows may be composed after this plugin
 itself; it is safe to call repeatedly.
 
+### 3a Migrating hand-written rows
+
+Rows written by hand in the profile patch can be moved under the manager: create them through the
+API (`POST /servers` with the same `serverName`, `url`, `headers` and `reconnect`), then delete the
+`- insert:` block from the patch. The manager recreates them from `created` on every start, and the
+client connects the same way. Verified on this profile on 2026-10-29: nine rows moved, the row ids
+stayed the same (`mcp-<name>`), and the tool call `mysql_query` answered right after the swap.
+`reconnect` is carried through untouched — the manager does not edit it, but a migrated row keeps
+its retry policy.
+
 ## 4 Security
 
 The write routes listen on the plugin's own loopback origin without authentication. That is why

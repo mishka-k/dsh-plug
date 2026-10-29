@@ -63,6 +63,10 @@ small, private, and never touches the hand-written configuration.
 | `allowStdio` | `false` | allow rows that spawn a command |
 | `probeTimeoutMs` | `8000` | timeout of one test handshake |
 
+A row may also carry the client's `reconnect` policy (`maxAttempts`, `maxDelayMs`). The page does
+not edit it; the API passes it through, so a server migrated from the profile patch keeps its retry
+behaviour.
+
 ## Security
 
 The page talks to its Host half over loopback routes on the plugin's own origin. Those routes are

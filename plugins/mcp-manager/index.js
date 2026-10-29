@@ -247,6 +247,10 @@ export function apply(ctx, config = {}) {
       if (args.length > 0) rowConfig.args = args
       if (typeof record.cwd === 'string' && record.cwd.trim() !== '') rowConfig.cwd = record.cwd.trim()
     }
+    // Reconnect tuning is a client knob, not a transport one: carried through untouched so a
+    // migrated row keeps the retry policy it had in the profile patch.
+    const reconnect = normalizeReconnect(record.reconnect)
+    if (reconnect !== undefined) rowConfig.reconnect = reconnect
 
     const requestedId = typeof record.id === 'string' && record.id !== '' ? record.id : undefined
     const existing = requestedId === undefined ? undefined : rows().find((entry) => entry.options.id === requestedId)
@@ -480,6 +484,20 @@ async function reply(response, value) {
 /** @returns the object body or an empty record. */
 function asRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+/**
+ * @param value - `{ maxAttempts, maxDelayMs }` from the page or a migrated row.
+ * @returns a clean reconnect policy, or undefined.
+ */
+function normalizeReconnect(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const reconnect = {}
+  const attempts = Number(value.maxAttempts)
+  if (Number.isFinite(attempts) && attempts > 0) reconnect.maxAttempts = Math.round(attempts)
+  const delay = Number(value.maxDelayMs)
+  if (Number.isFinite(delay) && delay > 0) reconnect.maxDelayMs = Math.round(delay)
+  return Object.keys(reconnect).length === 0 ? undefined : reconnect
 }
 
 /** @returns a validated server name. */
