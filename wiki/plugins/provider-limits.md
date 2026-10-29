@@ -48,14 +48,19 @@ here.
 `balance-account` is the primary path for money: the platform account knows both topped-up and
 granted credit. `balance-api` stays as the fallback — it only sees what sits on the API key.
 
+**Window vocabulary.** The plugin speaks one set of names for quota windows — `5h`, `week`,
+`month` — and the Host normalizes whatever a provider calls its buckets into those three keys
+(OpenCode's `rolling` / `weekly` / `monthly` become `5h` / `week` / `month`). The Client localizes
+exactly those keys.
+
 GLM Coding Plan meters **tokens** over a five-hour cycle and a weekly quota; its monthly limit is
 about MCP tool calls (`/api/monitor/usage/tool-usage`), a different endpoint that this pill does not
-read. The live answer carries `unit: 3, number: 5` (5 hours, 28 000 credits) and `unit: 6, number: 1`
-(1 week, 140 000 credits — 28 000 is exactly 20% of it), which is what
-[the plan description](https://www.aipricing.guru/z-ai-subscription-pricing) and
+read. The live answer carries `unit: 3, number: 5` (the `5h` window, 28 000 credits) and
+`unit: 6, number: 1` (the `week` window, 140 000 credits — 28 000 is exactly 20% of it), which is
+what [the plan description](https://www.aipricing.guru/z-ai-subscription-pricing) and
 [opencode-glm-quota](https://github.com/guyinwonder168/opencode-glm-quota) call "5h Token" and
-"Weekly". The first version of this page labelled the second window `1mo` — wrong, corrected
-2026-10-29.
+"Weekly". Earlier labels on this page were wrong twice — `1mo` and then `1w` — corrected
+2026-10-29 to `week`.
 
 Two provider quirks worth remembering:
 

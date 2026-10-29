@@ -8,8 +8,9 @@ hit, tok/s and the context meter.
 ```
 
 Every pill is a read-only indicator. Hovering or focusing it opens a card with the full
-breakdown: each quota window (5h / week / month), its usage, its reset time, and for credit-based
-plans what is left of the window allowance. Money values come from the platform account (the same
+breakdown: each quota window — always named `5h`, `week` or `month`, whatever the provider calls its
+buckets — its usage, its reset time, and for credit-based plans what is left of the window
+allowance. Money values come from the platform account (the same
 wallets Settings → Account shows); percentages come from the providers' internal usage APIs.
 
 ## Install
