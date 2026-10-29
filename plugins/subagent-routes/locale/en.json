@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Subagent routes",
+    "description": "Choose provider, model and reasoning effort for subagents; the policy is granted to every session, including resumed chats."
+  }
+}

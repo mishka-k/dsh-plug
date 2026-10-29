@@ -103,3 +103,7 @@ apart from conclusions.
 - The Web GUI index page requires a per-process token (`?token=`), known only to DSH. To verify a
   client entry use the `Slots` inspect provider instead of opening a browser yourself.
 - Plugin routes on loopback are unauthenticated: serve numbers, never secrets.
+- Never leave a promise from the loader (or any service) uncaught inside a route handler: a rejected
+  `loader.update` on a row it cannot address takes the whole host down, and the user sees a crash
+  dialog. Rows from a bundle are not addressable that way at all — `configEditor` handles profile rows
+  only.
