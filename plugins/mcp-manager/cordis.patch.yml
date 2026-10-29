@@ -1,0 +1,7 @@
+# Bundle layer: one plugin row. `allowStdio: false` keeps the page from spawning commands
+# until the operator turns it on; the write route only ever touches MCP client rows.
+- insert:
+    - id: mcp-manager
+      name: 'dsh-mcp-manager'
+      config:
+        allowStdio: false
