@@ -1,16 +1,14 @@
 /**
  * dsh-provider-limits — Client half.
  *
- * Pills under the composer, in the same row as the cache hit, tok/s and the context meter.
- * The numbers come from the Host half through `GET /plugin/provider-limits` (that is where
- * the keys live); this module polls the route once a minute and formats the answer. Provider
- * labels, short codes and currencies are not hardcoded here — they arrive in the snapshot.
+ * Two surfaces, one module:
  *
- * Hovering (or focusing) a pill opens a small card with the whole quota breakdown: every
- * window, its usage, when it resets, and what is left of its credit. A native `title` cannot
- * do that — it is slow, cannot be styled and is cut off by the dock's single line — so the
- * card is drawn here and portalled to `document.body` to escape the composer's stacking
- * context. If `react-dom` is unavailable the card still renders, anchored above the pill.
+ * - the pills under the composer, in the same row as the cache hit, tok/s and the context
+ *   meter. Numbers come from `GET /plugin/provider-limits` (the Host half owns the keys);
+ *   hovering or focusing a pill opens a card with the whole quota breakdown.
+ * - a Settings → Plugins tab, added by this plugin, that decides which providers the dock
+ *   shows and how often the snapshot refreshes. It writes the same route, and a successful
+ *   save refreshes the pills immediately instead of waiting for the next poll.
  *
  * @module dsh-provider-limits/client
  */
@@ -30,12 +28,27 @@ window.__ModuleLoader__.load({
 
     /** Locale namespace of this plugin. */
     const NS = 'provider-limits'
-    /** Host route, same origin as the page. */
+    /** Snapshot route, same origin as the page. */
     const ENDPOINT = '/plugin/provider-limits'
+    /** Catalogue and settings route of the same origin. */
+    const CONFIG_ENDPOINT = '/plugin/provider-limits/config'
     /** Snapshot poll interval, ms. */
     const POLL_MS = 60_000
-    /** Grace period before closing the card, so the pointer can travel into it, ms. */
+    /** Grace period before closing the hover card, so the pointer can travel into it, ms. */
     const CLOSE_DELAY_MS = 120
+
+    /** Subscribers that want a fresh snapshot right away (the settings page calls this). */
+    const refreshSubscribers = new Set()
+    /** Ask every mounted pill row to reload the snapshot now. */
+    function notifyRefresh() {
+      for (const notify of refreshSubscribers) {
+        try {
+          notify()
+        } catch {
+          // A broken subscriber must not stop the others.
+        }
+      }
+    }
 
     /** English strings; the host `t` takes over whenever the slot provides it. */
     const DICT = {
@@ -51,10 +64,22 @@ window.__ModuleLoader__.load({
       minute: 'min',
       hour: 'h',
       day: 'd',
+      nav: 'Provider limits',
+      'settings.title': 'Provider limits',
+      'settings.intro':
+        'Choose which providers appear under the composer and how often their numbers are refreshed.',
+      'settings.providers': 'Providers',
+      'settings.empty': 'No providers are configured for this plugin.',
+      'settings.refresh': 'Refresh every',
+      'settings.refreshUnit': 'seconds',
+      'settings.saved': 'Saved',
+      'settings.loading': 'Loading…',
+      'settings.shown': 'shown',
+      'settings.hidden': 'hidden',
     }
 
     /** Pill and card styling, copied from the host stats pills/dialog under our own prefix. */
-    const CSS = [
+    const PILL_CSS = [
       '.dshpl_group{display:contents}',
       '.dshpl_anchor{position:relative;min-width:0;',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);',
@@ -63,13 +88,13 @@ window.__ModuleLoader__.load({
       'color:var(--dsw-alias-label-tertiary);font:inherit;font-variant-numeric:tabular-nums;',
       'line-height:inherit;white-space:nowrap;background:0 0;border:none;align-items:center;gap:6px;',
       'padding:1px 8px;display:inline-flex;cursor:default}',
-      '.dshpl_pill:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}',
+      '.dshpl_pill:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}',
       '.dshpl_pill svg{flex:none;width:14px;height:14px}',
       '.dshpl_quiet .dshpl_pill{opacity:.6}',
       '.dshpl_label{text-overflow:ellipsis;min-width:0;overflow:hidden}',
       '.dshpl_panel{box-sizing:border-box;z-index:60;width:max-content;min-width:236px;max-width:340px;',
-      'padding:10px 12px;border-radius:var(--dsw-radius-md,10px);background:var(--dsw-specific-menu);',
-      'border:.5px solid var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);',
+      'padding:10px 12px;border-radius:10px;background:var(--dsw-alias-bg-overlay);',
+      'border:.5px solid var(--dsw-alias-border-l1);box-shadow:0 8px 24px rgba(0,0,0,.18);',
       'color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:400;',
       'white-space:normal;text-align:left}',
       '.dshpl_panel[data-portal="false"]{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%)}',
@@ -84,7 +109,41 @@ window.__ModuleLoader__.load({
       '.dshpl_rowName{color:var(--dsw-alias-label-tertiary)}',
       '.dshpl_rowValue{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary)}',
       '.dshpl_rowNote{color:var(--dsw-alias-label-tertiary);text-align:right;font-variant-numeric:tabular-nums}',
-      '.dshpl_footer{color:var(--dsw-alias-label-caption);margin-top:6px}',
+      '.dshpl_footer{color:var(--dsw-alias-label-tertiary);opacity:.8;margin-top:6px}',
+    ].join('')
+
+    /** Settings tab styling: header, cards and switches in the host's settings language. */
+    const SETTINGS_CSS = [
+      '.dshps_section{max-width:760px;display:flex;flex-direction:column;gap:12px;',
+      'color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}',
+      '.dshps_title{margin:0;font-size:18px;font-weight:600}',
+      '.dshps_intro{margin:0;color:var(--dsw-alias-label-secondary)}',
+      '.dshps_card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;',
+      'background:var(--dsw-alias-bg-layer-1);padding:4px 14px}',
+      '.dshps_row{display:flex;align-items:center;justify-content:space-between;gap:16px;',
+      'min-height:44px;border-top:.5px solid var(--dsw-alias-border-l1)}',
+      '.dshps_row:first-child{border-top:0}',
+      '.dshps_rowMain{display:flex;flex-direction:column;min-width:0;padding:8px 0}',
+      '.dshps_rowLabel{font-weight:500}',
+      '.dshps_rowMeta{color:var(--dsw-alias-label-secondary);font-size:12px}',
+      '.dshps_switch{box-sizing:border-box;flex:none;width:36px;height:20px;padding:0;border:0;',
+      'border-radius:10px;background:var(--dsw-alias-state-idle-primary);position:relative;',
+      'cursor:pointer;transition:background .12s}',
+      '.dshps_switch[data-on="true"]{background:var(--dsw-alias-brand-primary)}',
+      '.dshps_switch:disabled{opacity:.5;cursor:default}',
+      '.dshps_switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}',
+      '.dshps_knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;',
+      'background:var(--dsw-alias-bg-base);transition:transform .12s}',
+      '.dshps_switch[data-on="true"] .dshps_knob{transform:translateX(16px)}',
+      '.dshps_field{display:flex;align-items:center;gap:10px;padding:4px 0}',
+      '.dshps_fieldLabel{color:var(--dsw-alias-label-primary)}',
+      '.dshps_input{box-sizing:border-box;width:90px;padding:4px 8px;border-radius:6px;',
+      'border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);',
+      'color:var(--dsw-alias-label-primary);font:inherit;font-variant-numeric:tabular-nums}',
+      '.dshps_input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
+      '.dshps_hint{color:var(--dsw-alias-label-secondary);font-size:12px}',
+      '.dshps_error{color:var(--dsw-alias-state-error-primary);margin:0}',
+      '.dshps_ok{color:var(--dsw-alias-state-success-primary);margin:0}',
     ].join('')
 
     /** Quota icon: three rising bars. */
@@ -145,9 +204,17 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** Polls the Host route: snapshot plus a failure flag. */
+    /** Polls the Host route: snapshot plus a failure flag. Reloads on a settings save. */
     function useSnapshot() {
       const [state, setState] = React.useState({ snapshot: undefined, failed: false })
+      const [generation, setGeneration] = React.useState(0)
+      React.useEffect(() => {
+        const bump = () => setGeneration((value) => value + 1)
+        refreshSubscribers.add(bump)
+        return () => {
+          refreshSubscribers.delete(bump)
+        }
+      }, [])
       React.useEffect(() => {
         let alive = true
         let timer
@@ -169,7 +236,7 @@ window.__ModuleLoader__.load({
           alive = false
           clearInterval(timer)
         }
-      }, [])
+      }, [generation])
       return state
     }
 
@@ -280,7 +347,7 @@ window.__ModuleLoader__.load({
         provider.windows.forEach((window, index) => rows.push(windowRow(t, window, index)))
       }
       if (Array.isArray(provider.wallets)) {
-        for (const [index, wallet] of provider.wallets.entries()) {
+        provider.wallets.forEach((wallet, index) => {
           rows.push(
             h(
               'div',
@@ -289,11 +356,16 @@ window.__ModuleLoader__.load({
               h('span', { className: 'dshpl_rowValue' }, money([wallet])),
             ),
           )
-        }
+        })
       }
       if (rows.length === 0 && typeof provider.error === 'string' && provider.error !== '') {
         rows.push(
-          h('div', { className: 'dshpl_row', key: 'error' }, h('span', { className: 'dshpl_rowName' }, 'error'), h('span', { className: 'dshpl_rowValue' }, provider.error)),
+          h(
+            'div',
+            { className: 'dshpl_row', key: 'error' },
+            h('span', { className: 'dshpl_rowName' }, 'error'),
+            h('span', { className: 'dshpl_rowValue' }, provider.error),
+          ),
         )
       }
       if (age !== null) rows.push(h('div', { className: 'dshpl_footer', key: 'age' }, t('stale', { age })))
@@ -400,7 +472,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Limits row under the composer: one pill per provider.
+     * Limits row under the composer: one pill per visible provider.
      * @param props - slot entry props (`t` arrives from the slot locale).
      */
     function ProviderLimits(props) {
@@ -409,18 +481,161 @@ window.__ModuleLoader__.load({
       const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : []
       const age = relativeAge(t, snapshot?.fetchedAt)
       if (providers.length === 0) {
-        // No data yet (or the route is unreachable): render nothing. An empty pill in the
-        // dock is worse than no pill; the failure stays in the package console.
+        // No data yet, the route is unreachable, or every provider is switched off in settings:
+        // render nothing. An empty pill in the dock is worse than no pill.
         if (failed) console.warn('[provider-limits] /plugin/provider-limits is unreachable')
         return null
       }
       return h(
         'span',
         { className: 'dshpl_group' },
-        h('style', { key: 'style' }, CSS),
-        providers.map((provider) =>
-          h(ProviderPill, { key: provider.id, provider, t, age }),
+        h('style', { key: 'style' }, PILL_CSS),
+        providers.map((provider) => h(ProviderPill, { key: provider.id, provider, t, age })),
+      )
+    }
+
+    /**
+     * Settings → Plugins tab: pick which providers the dock shows and how often the numbers
+     * refresh. Every change is written straight to the Host store; a successful write asks the
+     * pills to reload, so the dock follows the switch without waiting for the next poll.
+     * @param props - slot entry props.
+     */
+    function SettingsTab(props) {
+      const t = translator(props)
+      const [config, setConfig] = React.useState(undefined)
+      const [error, setError] = React.useState(null)
+      const [saved, setSaved] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
+      const [seconds, setSeconds] = React.useState('')
+
+      const apply = (body) => {
+        setConfig(body)
+        setSeconds(String(Math.round(Number(body.refreshMs) / 1000)))
+      }
+
+      const load = async () => {
+        try {
+          const response = await fetch(CONFIG_ENDPOINT, { headers: { accept: 'application/json' } })
+          if (!response.ok) throw new Error(`HTTP ${response.status}`)
+          apply(await response.json())
+          setError(null)
+        } catch (failure) {
+          setError(String(failure?.message ?? failure))
+        }
+      }
+
+      React.useEffect(() => {
+        load()
+      }, [])
+
+      const save = async (patch) => {
+        setBusy(true)
+        setError(null)
+        setSaved(false)
+        try {
+          const response = await fetch(CONFIG_ENDPOINT, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify(patch),
+          })
+          const body = await response.json().catch(() => ({}))
+          if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+          apply(body)
+          setSaved(true)
+          notifyRefresh()
+        } catch (failure) {
+          setError(String(failure?.message ?? failure))
+          await load()
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const toggle = (id) => {
+        if (config === undefined || busy) return
+        const providers = config.providers.map((provider) =>
+          provider.id === id ? { ...provider, enabled: !provider.enabled } : provider,
+        )
+        // Optimistic: the switch flips now, the write decides whether it stays flipped.
+        setConfig({ ...config, providers })
+        setSaved(false)
+        save({ enabled: providers.filter((provider) => provider.enabled).map((provider) => provider.id) })
+      }
+
+      const commitSeconds = () => {
+        const parsed = Number(seconds)
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          load()
+          return
+        }
+        save({ refreshMs: Math.round(parsed * 1000) })
+      }
+
+      const providers = config?.providers ?? []
+      return h(
+        'div',
+        { className: 'dshps_section' },
+        h('style', { key: 'style' }, SETTINGS_CSS),
+        h('h2', { className: 'dshps_title' }, t('settings.title')),
+        h('p', { className: 'dshps_intro' }, t('settings.intro')),
+        h(
+          'div',
+          { className: 'dshps_card' },
+          providers.length === 0
+            ? h('p', { className: 'dshps_hint' }, config === undefined ? t('settings.loading') : t('settings.empty'))
+            : providers.map((provider) =>
+                h(
+                  'div',
+                  { className: 'dshps_row', key: provider.id },
+                  h(
+                    'span',
+                    { className: 'dshps_rowMain' },
+                    h('span', { className: 'dshps_rowLabel' }, provider.label),
+                    h(
+                      'span',
+                      { className: 'dshps_rowMeta' },
+                      `${provider.kind ?? provider.id} · ${t(provider.enabled ? 'settings.shown' : 'settings.hidden')}`,
+                    ),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      role: 'switch',
+                      'aria-checked': provider.enabled,
+                      'aria-label': provider.label,
+                      className: 'dshps_switch',
+                      'data-on': provider.enabled ? 'true' : 'false',
+                      disabled: busy,
+                      onClick: () => toggle(provider.id),
+                    },
+                    h('span', { className: 'dshps_knob' }),
+                  ),
+                ),
+              ),
         ),
+        h(
+          'div',
+          { className: 'dshps_field' },
+          h('label', { className: 'dshps_fieldLabel', htmlFor: 'dshpl-refresh' }, t('settings.refresh')),
+          h('input', {
+            id: 'dshpl-refresh',
+            className: 'dshps_input',
+            type: 'number',
+            min: config === undefined ? undefined : Math.round(Number(config.minRefreshMs) / 1000),
+            max: config === undefined ? undefined : Math.round(Number(config.maxRefreshMs) / 1000),
+            value: seconds,
+            disabled: busy || config === undefined,
+            onChange: (event) => setSeconds(event.target.value),
+            onBlur: commitSeconds,
+            onKeyDown: (event) => {
+              if (event.key === 'Enter') commitSeconds()
+            },
+          }),
+          h('span', { className: 'dshps_hint' }, t('settings.refreshUnit')),
+        ),
+        error === null ? null : h('p', { className: 'dshps_error' }, error),
+        saved ? h('p', { className: 'dshps_ok' }, t('settings.saved')) : null,
       )
     }
 
@@ -428,6 +643,7 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, 'en', DICT), 'provider-limits: dictionary')
+        const t = ctx.locale.bind(NS)
         ctx.slots.inject('conversation.composer.dock', () =>
           ctx.slots.register(
             {
@@ -437,6 +653,18 @@ window.__ModuleLoader__.load({
               locale: NS,
             },
             ProviderLimits,
+          ),
+        )
+        ctx.slots.inject('settings.plugins.tab', () =>
+          ctx.slots.register(
+            {
+              name: 'settings.plugins.tab',
+              id: 'provider-limits',
+              order: 50,
+              label: () => t('nav'),
+              locale: NS,
+            },
+            SettingsTab,
           ),
         )
       },

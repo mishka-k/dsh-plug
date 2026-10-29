@@ -21,8 +21,8 @@ in the bundle's module table.
 
 | Half | What it does |
 |---|---|
-| Host (`index.js`) | Calls the providers with keys from the `credentials` service, caches the snapshot in memory for `refreshMs` (120 s by default), serves it at `GET /plugin/provider-limits` |
-| Client (`client.js`) | Registers the `provider-limits` entry in the `conversation.composer.dock` slot, polls the route once a minute, formats the numbers |
+| Host (`index.js`) | Calls the providers with keys from the `credentials` service, caches the snapshot in memory for `refreshMs`, serves it at `GET /plugin/provider-limits`, and owns the user store behind `GET`/`PUT /plugin/provider-limits/config` |
+| Client (`client.js`) | Registers the pills in `conversation.composer.dock`, the configuration tab in `settings.plugins.tab`, polls the snapshot once a minute, formats the numbers |
 
 No secret ever reaches the browser: the key stays inside the DSH process and the page only gets
 percentages and amounts. The route listens on loopback of the plugin's own origin and serves
@@ -54,6 +54,23 @@ Two provider quirks worth remembering:
   way it rejects Python's `urllib`, with a 403. Hence the `curl/8.7.1` constant.
 - The stored `DEEPSEEK_API_KEY` credential answered `401` on 2026-10-29, so the balance comes from
   the account. If the key starts working again, `balance-api` picks it up as the fallback.
+
+## 3a Settings: two layers
+
+The provider catalogue and the user's choice live apart on purpose.
+
+| Layer | Where | Owns | Written by |
+|---|---|---|---|
+| Plugin Config | profile `cordis.patch.yml` | provider catalogue: ids, kinds, endpoints, key names, labels, default interval | the user, by hand |
+| User store | `$DSH_HOME/provider-limits/settings.json` (0600) | which providers are visible, refresh override | the Settings page |
+
+The Settings page is a tab in Settings → Plugins (`settings.plugins.tab`, id `provider-limits`,
+order 50, next to the built-in inventory tab) with one switch per provider and a refresh field.
+`PUT /plugin/provider-limits/config` accepts only `enabled` (a list of known ids) and `refreshMs`
+(15 s to 1 h); anything else is a 400. That restriction is the point: the endpoints and key names
+stay out of reach of the write route, so a stray local request cannot redirect a key to another
+host. A successful write clears the snapshot, and the page asks the pills to reload at once
+instead of waiting for the next poll.
 
 ## 4 Configuration
 
@@ -96,6 +113,9 @@ Example: drop z.ai and add a custom `balance-api` provider.
 | Account balance | same response, `kind: balance-account` | returned `USD 1.37`, so the account is signed in and the platform accepted the metadata |
 | Live polling | snapshot `fetchedAt` advanced while no shell request was made | the page's component polls, i.e. it is mounted and rendering |
 | Hover card | reported by the user as missing on the first version, where the tooltip sat on a `display:contents` wrapper and could not receive hover | card moved onto the pill, `title` dropped, breakdown rendered as a portal |
+| Settings tab | `Slots.listSubTree` on `settings.plugins.tab` | `provider-limits`, `order: 50`, `active: true` beside the inventory tab |
+| Provider switch | `PUT /plugin/provider-limits/config` with two ids | snapshot dropped the switched-off provider; store file written with mode 600 |
+| Write guards | `PUT` with an unknown id, then with `refreshMs: 1` | both answered 400 with the reason |
 | Pixels in the GUI | not inspected directly | the page's index needs a per-process token; verification went through the slot inspector |
 
 ## 6 Pitfalls

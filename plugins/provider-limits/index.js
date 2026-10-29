@@ -3,21 +3,35 @@
  *
  * The composer dock already shows cache hit, tok/s and the context meter. What it does not
  * show is how much of each subscription is left and how much money sits on the provider
- * account. This half owns the network and the secrets; the Client half only renders numbers.
+ * account. This half owns the network, the secrets and the user's choice of which pills show.
  *
  * Keys come from the harness `credentials` service (the same store the models use), so no
- * secret ever reaches the browser. The Client half polls one same-origin route,
- * `GET /plugin/provider-limits`, and the snapshot behind it is cached for `refreshMs`.
+ * secret ever reaches the browser. The Client half polls `GET /plugin/provider-limits` and the
+ * snapshot behind it is cached for `refreshMs`.
  *
- * Nothing personal is hardcoded: providers, endpoints, key names and labels come from the
- * plugin Config; the defaults are public API addresses and environment variable names only.
- * Each `kind` is one adapter with a documented response shape.
+ * Two layers of settings, on purpose:
+ * - the plugin Config (profile patch) owns the provider catalogue — endpoints, key names, labels;
+ * - a small user store under `$DSH_HOME/provider-limits/settings.json` owns visibility — which
+ *   providers the dock shows and how often the snapshot refreshes. Only that second layer is
+ *   writable from the Settings page, and the write route accepts nothing but ids and a number,
+ *   so a stray local request can never redirect a key to another host.
  *
  * @module dsh-provider-limits
  */
 
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
 /** Route path; the Client half calls exactly this. */
 const ROUTE_PATH = '/plugin/provider-limits'
+/** Route that carries the provider catalogue and the user store. */
+const CONFIG_PATH = '/plugin/provider-limits/config'
+/** Body cap for the settings write, bytes. */
+const BODY_LIMIT = 8 * 1024
+/** Bounds for the refresh interval accepted from the page, ms. */
+const MIN_REFRESH_MS = 15_000
+const MAX_REFRESH_MS = 3_600_000
 /**
  * User-Agent sent to providers: some CDNs (opencode.ai among them) reject the runtime's
  * default `node` agent, just like they reject Python's urllib, with a 403.
@@ -25,8 +39,11 @@ const ROUTE_PATH = '/plugin/provider-limits'
 const USER_AGENT = 'curl/8.7.1'
 /** Timeout of a single provider request, ms. */
 const HTTP_TIMEOUT_MS = 15_000
-/** How long a snapshot lives in memory, ms (the Client polls more often and hits the cache). */
+/** How long a snapshot lives in memory when the user store does not override it, ms. */
 const DEFAULT_REFRESH_MS = 120_000
+/** Where the user store lives. */
+const SETTINGS_DIR = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'provider-limits')
+const SETTINGS_FILE = join(SETTINGS_DIR, 'settings.json')
 
 /**
  * Default providers — public API addresses and environment variable names, no keys and no
@@ -63,14 +80,14 @@ const DEFAULT_PROVIDERS = [
 export const name = 'provider-limits'
 
 /**
- * Only the route is required. Keys (`credentials`) and the account (`deepseekAccount`) are
+ * Only the routes are required. Keys (`credentials`) and the account (`deepseekAccount`) are
  * read lazily through ctx.get, so a profile without them still mounts: the affected pill
  * simply reports an error.
  */
 export const inject = ['webServer']
 
 /**
- * Mount the route and the snapshot cache.
+ * Mount the routes, the snapshot cache and the user store.
  * @param ctx - plugin context.
  * @param config - plugin row from cordis.patch.yml; every field is optional.
  */
@@ -84,6 +101,8 @@ export function apply(ctx, config = {}) {
       typeof config.accountVersion === 'string' && config.accountVersion !== '' ? config.accountVersion : name,
   }
 
+  /** User store: which providers are visible, and an optional refresh override. */
+  let user = readStore()
   /** Last snapshot and when it was built (ms); 0 means not built yet. */
   let snapshot = { updatedAt: 0, fetchedAt: null, providers: [] }
   /** Shared build promise: concurrent Client requests never multiply provider calls. */
@@ -93,30 +112,32 @@ export function apply(ctx, config = {}) {
     kind: 'exact',
     path: ROUTE_PATH,
     handler: async (request, response) => {
-      if (request.method !== 'GET') {
-        response.statusCode = 405
-        response.setHeader('allow', 'GET')
-        response.end()
-        return
-      }
-      try {
-        const body = JSON.stringify(await current())
-        response.statusCode = 200
-        response.setHeader('content-type', 'application/json; charset=utf-8')
-        response.setHeader('cache-control', 'no-store')
-        response.end(body)
-      } catch (error) {
-        response.statusCode = 500
-        response.setHeader('content-type', 'application/json; charset=utf-8')
-        response.end(JSON.stringify({ error: message(error) }))
-      }
+      if (request.method !== 'GET') return methodNotAllowed(response)
+      await answer(response, async () => await current())
     },
   })
-  ctx.effect(() => () => routeDispose(), 'provider-limits: route')
+  ctx.effect(() => () => routeDispose(), 'provider-limits: snapshot route')
 
-  /** @returns a snapshot no older than refreshMs; a fresh one comes from the cache. */
+  const configDispose = ctx.webServer.register({
+    kind: 'exact',
+    path: CONFIG_PATH,
+    handler: async (request, response) => {
+      if (request.method === 'GET') {
+        await answer(response, async () => catalogue())
+        return
+      }
+      if (request.method === 'PUT') {
+        await answer(response, async () => await writeStore(request))
+        return
+      }
+      methodNotAllowed(response, ['GET', 'PUT'])
+    },
+  })
+  ctx.effect(() => () => configDispose(), 'provider-limits: config route')
+
+  /** @returns the snapshot, refreshed when older than the effective interval. */
   async function current() {
-    if (snapshot.updatedAt !== 0 && Date.now() - snapshot.updatedAt < settings.refreshMs) return snapshot
+    if (snapshot.updatedAt !== 0 && Date.now() - snapshot.updatedAt < effectiveRefreshMs()) return snapshot
     if (inFlight !== undefined) return await inFlight
     inFlight = refresh().finally(() => {
       inFlight = undefined
@@ -124,16 +145,82 @@ export function apply(ctx, config = {}) {
     return await inFlight
   }
 
-  /** @returns a new snapshot; each provider is read independently of its neighbours. */
+  /** @returns the rebuild of the snapshot over the visible providers. */
   async function refresh() {
-    const providers = await Promise.all(settings.providers.map(readProvider))
+    const providers = await Promise.all(visibleProviders().map(readProvider))
     snapshot = { updatedAt: Date.now(), fetchedAt: new Date().toISOString(), providers }
     return snapshot
   }
 
+  /** @returns the provider catalogue with the user's visibility applied. */
+  function catalogue() {
+    return {
+      providers: settings.providers.map((provider) => ({
+        id: provider.id,
+        label: provider.label ?? provider.id,
+        short: provider.short ?? provider.id,
+        kind: provider.kind ?? null,
+        enabled: isVisible(provider.id),
+      })),
+      refreshMs: effectiveRefreshMs(),
+      minRefreshMs: MIN_REFRESH_MS,
+      maxRefreshMs: MAX_REFRESH_MS,
+      updatedAt: snapshot.updatedAt === 0 ? null : new Date(snapshot.updatedAt).toISOString(),
+    }
+  }
+
+  /**
+   * Persist a settings patch from the page. Only ids and a number are accepted: the write
+   * route never touches endpoints or key names.
+   * @param request - the PUT request.
+   * @returns the catalogue after the write.
+   */
+  async function writeStore(request) {
+    const patch = parseBody(await readBody(request))
+    let changed = false
+    if (patch.enabled !== undefined) {
+      if (!Array.isArray(patch.enabled) || patch.enabled.some((id) => typeof id !== 'string')) {
+        throw new BadRequest('enabled must be an array of provider ids')
+      }
+      const known = new Set(settings.providers.map((provider) => provider.id))
+      const unknown = patch.enabled.filter((id) => !known.has(id))
+      if (unknown.length > 0) throw new BadRequest(`unknown provider id: ${unknown.join(', ')}`)
+      const all = new Set(patch.enabled).size === known.size
+      user.enabled = all ? null : [...new Set(patch.enabled)]
+      changed = true
+    }
+    if (patch.refreshMs !== undefined) {
+      const value = Number(patch.refreshMs)
+      if (!Number.isFinite(value) || value < MIN_REFRESH_MS || value > MAX_REFRESH_MS) {
+        throw new BadRequest(`refreshMs must be between ${MIN_REFRESH_MS} and ${MAX_REFRESH_MS}`)
+      }
+      user.refreshMs = Math.round(value)
+      changed = true
+    }
+    if (!changed) return catalogue()
+    writeStoreFile(user)
+    snapshot = { updatedAt: 0, fetchedAt: null, providers: [] }
+    return catalogue()
+  }
+
+  /** @returns providers the dock should show. */
+  function visibleProviders() {
+    return settings.providers.filter((provider) => isVisible(provider.id))
+  }
+
+  /** @returns whether one provider is switched on by the user store. */
+  function isVisible(id) {
+    if (user.enabled === null || user.enabled === undefined) return true
+    return user.enabled.includes(id)
+  }
+
+  /** @returns the refresh interval in force, ms. */
+  function effectiveRefreshMs() {
+    return positive(user.refreshMs) ?? settings.refreshMs
+  }
+
   /**
    * One provider: a failure never takes its neighbours down, it lands in `error`.
-   * Order is `kind`, then `fallback` when the first one yields no numbers.
    * @param provider - entry of the provider list.
    * @returns snapshot element.
    */
@@ -278,6 +365,80 @@ export function apply(ctx, config = {}) {
   }
 }
 
+/** A rejected settings write; the handler answers 400 with its message. */
+class BadRequest extends Error {}
+
+/** @returns the JSON body of `response`, or 400 on a bad request. */
+async function answer(response, produce) {
+  try {
+    const body = JSON.stringify(await produce())
+    response.statusCode = 200
+    response.setHeader('content-type', 'application/json; charset=utf-8')
+    response.setHeader('cache-control', 'no-store')
+    response.end(body)
+  } catch (error) {
+    const status = error instanceof BadRequest ? 400 : 500
+    response.statusCode = status
+    response.setHeader('content-type', 'application/json; charset=utf-8')
+    response.end(JSON.stringify({ error: message(error) }))
+  }
+}
+
+/** @returns 405 with the allowed methods. */
+function methodNotAllowed(response, methods = ['GET']) {
+  response.statusCode = 405
+  response.setHeader('allow', methods.join(', '))
+  response.end()
+}
+
+/** @returns the request body, capped at BODY_LIMIT bytes. */
+async function readBody(request) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > BODY_LIMIT) throw new BadRequest('body too large')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/** @returns the parsed JSON body; an empty body means "no change". */
+function parseBody(text) {
+  if (typeof text !== 'string' || text.trim() === '') return {}
+  try {
+    const value = JSON.parse(text)
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    throw new BadRequest('body must be JSON')
+  }
+}
+
+/**
+ * Read the user store; a missing or broken file means "everything visible, default interval".
+ * @returns `{ enabled, refreshMs }` where `enabled` is null for "all providers".
+ */
+function readStore() {
+  try {
+    const raw = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))
+    const enabled = Array.isArray(raw?.enabled) ? raw.enabled.filter((id) => typeof id === 'string') : null
+    const refreshMs = positive(raw?.refreshMs)
+    return { enabled, refreshMs }
+  } catch {
+    return { enabled: null, refreshMs: null }
+  }
+}
+
+/** Write the user store atomically, owner-readable only. */
+function writeStoreFile(store) {
+  mkdirSync(SETTINGS_DIR, { recursive: true, mode: 0o700 })
+  const temp = `${SETTINGS_FILE}.tmp`
+  writeFileSync(temp, `${JSON.stringify({ enabled: store.enabled, refreshMs: store.refreshMs }, null, 2)}\n`, {
+    mode: 0o600,
+  })
+  renameSync(temp, SETTINGS_FILE)
+}
+
 /**
  * Provider list: defaults without Config, otherwise a merge by id (Config fields win over
  * the defaults and `enabled: false` drops the entry).
@@ -301,7 +462,7 @@ function resolveProviders(config) {
 /**
  * Window name from a quota window's `unit` and `number`. Only the pairs observed in live
  * responses are mapped (`3:5` = a five-hour window, `6:1` = one month); anything else stays
- * unlabelled and the Client falls back to a positional name.
+ * unlabelled and the Client shows the provider's own label.
  * @param unit - provider time unit code.
  * @param number - amount of those units.
  * @returns a short window name such as `5h` or `1mo`, or undefined.

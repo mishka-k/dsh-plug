@@ -27,6 +27,18 @@ Keys are never passed to the plugin. It reads them from the harness `credentials
 environment variable name, so it works as soon as the profile has keys for the providers you use
 (`OPENCODE_GO_API_KEY`, `ZAI_API_KEY`, `DEEPSEEK_API_KEY` by default).
 
+## Settings in the UI
+
+Settings → Plugins → **Provider limits** carries the day-to-day switches, no file editing needed:
+
+- one switch per configured provider — off hides its pill in the dock immediately;
+- the refresh interval in seconds (15 s to 1 h).
+
+Left alone, everything stays visible and the interval comes from the plugin Config. The page
+writes `$DSH_HOME/provider-limits/settings.json` (`enabled`, `refreshMs`), and that write route
+accepts nothing but provider ids and a number — endpoints and key names can only be changed in the
+Config, so a stray local request can never point a key at another host.
+
 ## Configuration
 
 Every field is optional; override the plugin row in your profile by `id: provider-limits`.
