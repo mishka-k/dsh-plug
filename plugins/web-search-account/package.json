@@ -1,0 +1,19 @@
+{
+  "name": "dsh-web-search-account",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek web search on the signed-in account token, independent of the selected model.",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md", "LICENSE"],
+  "keywords": ["dsh", "dsh-plugin", "web-search", "deepseek"],
+  "engines": { "node": ">=24" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}

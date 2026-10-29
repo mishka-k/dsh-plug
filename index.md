@@ -14,6 +14,9 @@ duplicated here.
   добавление, правка, тест рукопожатием, вкл/выкл, удаление; состояние в оверлее
   `$DSH_HOME/mcp-manager/servers.json`; 29.10.
 
+- [web-search-account](wiki/plugins/web-search-account.md) — провайдер веб-поиска на токене
+  аккаунта DeepSeek: работает на любой модели, выбор через `web.searchProvider`; 29.10.
+
 ## DSH mechanics
 
 - [Composer dock slot](wiki/harness/composer-dock.md) — `conversation.composer.dock`: the list of
