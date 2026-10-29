@@ -10,6 +10,10 @@ duplicated here.
   plus the account balance as pills under the composer, next to cache hit and the context meter;
   the Host half serves a snapshot at `/plugin/provider-limits`, keys come from `credentials`; 2026-10-29.
 
+- [mcp-manager](wiki/plugins/mcp-manager.md) — подключение любого MCP-сервера из GUI: список,
+  добавление, правка, тест рукопожатием, вкл/выкл, удаление; состояние в оверлее
+  `$DSH_HOME/mcp-manager/servers.json`; 29.10.
+
 ## DSH mechanics
 
 - [Composer dock slot](wiki/harness/composer-dock.md) — `conversation.composer.dock`: the list of

@@ -9,6 +9,7 @@ then shows up in Settings → Plugins next to the shipped ones.
 | Plugin | What it does |
 |---|---|
 | [provider-limits](plugins/provider-limits/) | Provider quotas and account balance as pills under the composer — next to cache hit, tok/s and the context meter |
+| [mcp-manager](plugins/mcp-manager/) | Add, edit, test, enable and remove MCP servers from Settings, without editing the profile patch |
 
 ## Install
 
