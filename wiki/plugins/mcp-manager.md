@@ -91,7 +91,7 @@ every model key lives (`$DSH_HOME/.credentials.yaml`, mode 0600).
 | What | How | Result |
 |---|---|---|
 | list | `GET /plugin/mcp-manager/servers` | nine rows of the profile, transport, URL and state |
-| create | `POST /servers` for `http://127.0.0.1:3017/mcp` | row `mcp-pw2` appeared, connected, written to the overlay |
+| create | `POST /servers` for `http://127.0.0.1:<port>/mcp` | row `mcp-pw2` appeared, connected, written to the overlay |
 | survive a reload | disable and enable the plugin row | `mcp-pw2` recreated from the overlay by the reconcile |
 | switch | `PUT /servers/enabled` | row disabled, overlay `disabled.mcp-pw2 = true` |
 | remove | `DELETE /servers?id=mcp-pw2` | row gone, overlay clean |

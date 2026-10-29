@@ -3,7 +3,7 @@
 ## 1 What it does
 
 Draws pills in the composer dock with what is left on each subscription: OpenCode Zen
-(`OC 33%`), GLM Coding Plan (`GLM 44%`) and the money on the account (`$1.37`). They sit in the
+(`OC 33%`), GLM Coding Plan (`GLM 44%`) and the money on the account. They sit in the
 same row as the shipped cache hit, tok/s and context meter, immediately to their right (`order: 2`
 in the slot).
 
@@ -122,9 +122,9 @@ Example: drop z.ai and add a custom `balance-api` provider.
 
 | What | How | Result |
 |---|---|---|
-| Host route | `curl http://127.0.0.1:51076/plugin/provider-limits` | 200, three providers: opencode 33%, z.ai 44%, deepseek `$1.37` |
+| Host route | `curl http://127.0.0.1:<port>/plugin/provider-limits` | 200, three providers: opencode and z.ai percentages plus the account balance |
 | Client entry | inspect → client `Slots.listSubTree` | `provider-limits`, `order: 2`, `active: true`, beside `activity` and `usage` |
-| Account balance | same response, `kind: balance-account` | returned `USD 1.37`, so the account is signed in and the platform accepted the metadata |
+| Account balance | same response, `kind: balance-account` | returned a USD wallet, so the account is signed in and the platform accepted the metadata |
 | Live polling | snapshot `fetchedAt` advanced while no shell request was made | the page's component polls, i.e. it is mounted and rendering |
 | Hover card | reported by the user as missing on the first version, where the tooltip sat on a `display:contents` wrapper and could not receive hover | card moved onto the pill, `title` dropped, breakdown rendered as a portal |
 | Settings tab | `Slots.listSubTree` on `settings.plugins.tab` | `provider-limits`, `order: 50`, `active: true` beside the inventory tab |

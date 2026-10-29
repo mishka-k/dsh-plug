@@ -4,7 +4,7 @@ Provider quota and account balance pills under the DSH composer — in the same 
 hit, tok/s and the context meter.
 
 ```
-[ 55 tok/s ]  [ cache hit 42% ]  [ OC 33% ]  [ GLM 44% ]  [ $1.37 ]  ( context )
+[ 55 tok/s ]  [ cache hit 42% ]  [ OC 33% ]  [ GLM 44% ]  [ <balance> ]  ( context )
 ```
 
 Every pill is a read-only indicator. Hovering or focusing it opens a card with the full
