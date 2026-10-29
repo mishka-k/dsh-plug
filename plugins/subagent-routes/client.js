@@ -46,7 +46,15 @@ window.__ModuleLoader__.load({
       all: 'All',
       none: 'None',
       readOnlyRoute: 'not offered by any current adapter',
-      sections: 'Section key',
+      effort: 'Reasoning effort for Subagents',
+      effortHint:
+        'The default a Subagent inherits when the delegation does not ask for a specific effort. The route policy carries no effort, so this is a property of the Subagent tool row.',
+      effortCurrent: 'current',
+      effortKnown: 'efforts these routes report',
+      effortDefault: 'Inherit from the parent',
+      effortNone: 'The allowed routes report no reasoning effort',
+      effortWhere:
+        'Change it in the profile patch: agentOptions.reasoningEffort on the tool-subagent row. A plugin cannot persist a bundle row, and this page does not pretend otherwise.',
     }
 
     /** Page styling in the host's settings language: theme tokens only. */
@@ -143,6 +151,8 @@ window.__ModuleLoader__.load({
         groups: [],
         error: null,
         saved: false,
+        effort: null,
+        efforts: [],
       })
 
       /** Load the namespace and the catalog together; either may fail independently. */
@@ -164,6 +174,18 @@ window.__ModuleLoader__.load({
           } catch {
             // A catalog failure leaves the stored routes visible and unselectable-but-kept.
           }
+          let effort = null
+          let efforts = []
+          try {
+            const status = await fetch('/plugin/subagent-routes/status', { headers: { accept: 'application/json' } })
+            if (status.ok) {
+              const body = await status.json()
+              effort = typeof body.effort === 'string' ? body.effort : null
+              efforts = Array.isArray(body.efforts) ? body.efforts : []
+            }
+          } catch {
+            // Without the status route the page still edits routes; the effort select stays empty.
+          }
           setState({
             phase: 'ready',
             enabled: value.enabled === true,
@@ -173,6 +195,8 @@ window.__ModuleLoader__.load({
             groups,
             error: null,
             saved: false,
+            effort,
+            efforts,
           })
         } catch (error) {
           setState((current) => ({ ...current, phase: 'error', error: String(error?.message ?? error) }))
@@ -306,6 +330,19 @@ window.__ModuleLoader__.load({
                       }),
                       item.modelName,
                       item.available ? null : h('span', { className: 'dshsr_hint' }, `(${t('readOnlyRoute')})`))))))),
+
+          h('div', { className: 'dshsr_group' },
+            h('div', { className: 'dshsr_groupHead' },
+              h('span', { className: 'dshsr_provider' }, t('effort')),
+              h('span', { className: 'dshsr_hint' }, t('effortHint'))),
+            h('span', { className: 'dshsr_hint' },
+              state.effort === null
+                ? t('effortDefault')
+                : `${t('effortCurrent')}: ${state.effort}`),
+            state.efforts.length === 0
+              ? h('span', { className: 'dshsr_hint' }, t('effortNone'))
+              : h('span', { className: 'dshsr_hint' }, `${t('effortKnown')}: ${state.efforts.join(', ')}`),
+            h('span', { className: 'dshsr_hint' }, t('effortWhere'))),
 
           h('div', { className: 'dshsr_actions' },
             h('button', { type: 'button', className: 'dshsr_button', 'data-tone': 'primary',

@@ -26,8 +26,19 @@
 
 export const name = 'subagent-routes'
 
-/** Session service owns the event append; the settings and projection services are optional. */
-export const inject = ['sessions']
+/** Route prefix of the page API. */
+const ROUTE = '/plugin/subagent-routes'
+/** Profiles rows whose `agentOptions` carry the child default. */
+const TOOL_ROWS = ['tool-subagent', 'tool-subagent-fork']
+/** Body cap for one write, bytes. */
+const BODY_LIMIT = 8 * 1024
+
+/**
+ * The session service owns the policy append; the settings service persists the child defaults; the
+ * model registry answers which efforts exist. All but the session service are optional so a profile
+ * without them still mounts.
+ */
+export const inject = ['sessions', 'webServer']
 
 /**
  * Mount the backfill.
@@ -65,10 +76,124 @@ export function apply(ctx) {
 
   ctx.on('session/created', backfill)
 
-  // The page reads this through the plugin's own row state; the accessor is registered as a
-  // service so a future tool can report the same number.
-  ctx.provide('subagentRoutesStatus', {
-    /** @returns how many sessions this process granted a policy to. */
-    patched: () => patched,
+  const dispose = ctx.webServer.register({
+    kind: 'prefix',
+    path: ROUTE,
+    handler: async (request, response) => {
+      const path = new URL(request.url ?? ROUTE, 'http://127.0.0.1').pathname.slice(ROUTE.length) || '/'
+      try {
+        if (request.method === 'GET' && path === '/status') {
+          await reply(response, { patched, ...(await readEffort()) })
+          return
+        }
+        if (request.method === 'PUT' && path === '/effort') {
+          throw new BadRequest(
+            'the child default cannot be persisted: the Subagent tool rows belong to a bundle, and a ' +
+              'plugin cannot rewrite their config — set agentOptions.reasoningEffort in the profile patch instead',
+          )
+        }
+        response.statusCode = 404
+        response.end()
+      } catch (error) {
+        const status = error instanceof BadRequest ? 400 : 500
+        response.statusCode = status
+        response.setHeader('content-type', 'application/json; charset=utf-8')
+        response.end(JSON.stringify({ error: String(error?.message ?? error) }))
+      }
+    },
   })
+  ctx.effect(() => () => dispose(), 'subagent-routes: page routes')
+
+
+  /**
+   * @returns the child default in force plus the efforts the allowed routes actually offer: the UI
+   *   must not invent an effort the current adapters would reject at delegation time.
+   */
+  async function readEffort() {
+    const loader = ctx.get('loader')
+    const values = new Set()
+    let current = null
+    for (const entry of loader === undefined || loader === null ? [] : [...loader.entries()]) {
+      if (!TOOL_ROWS.includes(String(entry?.options?.id ?? ''))) continue
+      const effort = entry.options.config?.agentOptions?.reasoningEffort
+      if (typeof effort === 'string' && effort !== '' && current === null) current = effort
+    }
+    const candidateRoutes = await allowedRoutes()
+    for (const effort of await effortsFor(candidateRoutes)) values.add(effort)
+    return {
+      effort: current,
+      efforts: [...values].sort(),
+      rows: TOOL_ROWS.filter((id) =>
+        loader === undefined || loader === null ? false : [...loader.entries()].some((entry) => entry?.options?.id === id),
+      ),
+    }
+  }
+
+  /** @returns the routes the settings section currently allows, so the effort list stays relevant. */
+  async function allowedRoutes() {
+    const selection = ctx.get('subagentModelSelection')
+    const current = selection?.current?.()
+    const routes = Array.isArray(current?.allowedModels) ? current.allowedModels : []
+    return routes.filter((route) => typeof route?.provider === 'string' && typeof route?.model === 'string')
+  }
+
+  /** @returns every effort id any of these routes offers, through the live model registry. */
+  async function effortsFor(routes) {
+    const llm = ctx.get('llm')
+    if (llm === undefined || llm === null) return []
+    const found = new Set()
+    for (const route of routes) {
+      try {
+        const info = await llm.resolveModelInfo(route.provider, route.model)
+        for (const effort of info?.reasoning?.efforts ?? []) {
+          if (typeof effort?.id === 'string' && effort.id !== '') found.add(effort.id)
+        }
+      } catch {
+        // A provider that cannot answer right now simply contributes nothing.
+      }
+    }
+    return found
+  }
+
+
 }
+
+/** A rejected page request; the handler answers 400 with its message. */
+class BadRequest extends Error {}
+
+/** @returns the JSON body, or 400 when it is not a JSON object. */
+async function json(request) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > BODY_LIMIT) throw new BadRequest('body too large')
+    chunks.push(chunk)
+  }
+  const text = Buffer.concat(chunks).toString('utf8')
+  if (text.trim() === '') return {}
+  try {
+    const value = JSON.parse(text)
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    throw new BadRequest('body must be a JSON object')
+  }
+}
+
+/** Write one JSON answer. */
+async function reply(response, value) {
+  response.statusCode = 200
+  response.setHeader('content-type', 'application/json; charset=utf-8')
+  response.setHeader('cache-control', 'no-store')
+  response.end(JSON.stringify(value))
+}
+
+/** @returns whether two plain values are structurally equal. */
+function sameJson(left, right) {
+  try {
+    return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {})
+  } catch {
+    return false
+  }
+}
+

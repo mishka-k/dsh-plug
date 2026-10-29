@@ -28,8 +28,11 @@ Three separate things keep this feature out of reach by default:
   from `remote.session.modelCatalog` — so nothing is hardcoded and a stored route that no adapter
   offers any more stays visible, marked as such.
 
-Gap 3 is a configuration of the Subagent tool row rather than of the route list; the page does not
-pretend to own it.
+Gap 3 — the child's default reasoning effort — is a property of the Subagent **tool row**, not of the
+route list, and a plugin cannot persist it: the rows belong to a bundle, `configEditor` accepts only
+profile rows, and `ctx.loader.update` on a bundle row throws `cannot resolve entry`. The page therefore
+*reports* the effort in force and the efforts the allowed routes actually offer, and says where to
+change it: `agentOptions.reasoningEffort` on the `tool-subagent` row in the profile patch.
 
 ## Install
 
@@ -49,6 +52,15 @@ shows the current state.
 | switch on, resumed session | the plugin writes the policy before the tools are composed |
 | child session | skipped, it inherits its parent's policy |
 | policy already present (old list included) | left untouched |
+
+## Pitfalls
+
+- Anything that touches loader rows must not run inside a route handler without a `.catch` on the
+  returned promise: `loader.update` rejects asynchronously for a row it cannot address, and an
+  unhandled rejection inside the Web handler takes the whole host down. An earlier version of this
+  plugin did exactly that with the effort write; the write is gone, the page is read-only for it.
+- `configEditor.entries()` answers "addressable profile rows"; bundle rows are not among them, even
+  when `configuration()` lists them.
 
 ## Limitations
 
