@@ -460,18 +460,22 @@ function resolveProviders(config) {
 }
 
 /**
- * Window name from a quota window's `unit` and `number`. Only the pairs observed in live
- * responses are mapped (`3:5` = a five-hour window, `6:1` = one month); anything else stays
- * unlabelled and the Client shows the provider's own label.
+ * Window name from a quota window's `unit` and `number`.
+ *
+ * GLM Coding Plan meters tokens over two windows — a five-hour cycle and a weekly quota (140 000
+ * credits a week on Max, with the 28 000 five-hour allowance as 20% of it) — and meters *MCP tool*
+ * usage monthly, which is a different endpoint and not part of this list. The live `limits[]`
+ * answer therefore carries `3:5` (hours) and `6:1` (week); unknown pairs stay unlabelled and the
+ * Client falls back to the provider's own label.
  * @param unit - provider time unit code.
  * @param number - amount of those units.
- * @returns a short window name such as `5h` or `1mo`, or undefined.
+ * @returns a short window name such as `5h` or `1w`, or undefined.
  */
 function quotaWindowLabel(unit, number) {
   const amount = Number(number)
   if (!Number.isFinite(amount) || amount <= 0) return undefined
   if (Number(unit) === 3) return `${amount}h`
-  if (Number(unit) === 6) return `${amount}mo`
+  if (Number(unit) === 6) return `${amount}w`
   return undefined
 }
 
