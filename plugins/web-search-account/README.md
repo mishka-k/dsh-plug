@@ -4,9 +4,13 @@ Web search that authenticates with the **signed-in DeepSeek account**, whatever 
 conversation runs on.
 
 The harness ships `web-search-deepseek`, and it uses the account only when the current turn's model
-provider is `deepseek-account`; on any other model it falls back to `DEEPSEEK_API_KEY`. Profiles that
-run models from another provider therefore lose search even though the account is signed in — and the
-key sitting in the credential store may be a stale identifier that answers 401.
+provider is `deepseek-account`; on any other model it falls back to `DEEPSEEK_API_KEY`. A profile that
+runs models from another provider therefore loses search while its account is signed in and healthy.
+
+That fallback is easy to misread: the platform's *app-managed* key (`DeepSeek Harness` in the API
+keys panel) exposes only a tracking id, and a store holding that id answers 401 to every key-style
+request. With a real `sk-…` key in `DEEPSEEK_API_KEY` the bundled provider works on any model again —
+this plugin exists so search does not depend on either credential staying valid.
 
 This plugin registers one more provider, `deepseek-account`, that always sends the account token
 (`x-dsh-auth-token`) and never looks at the model.
