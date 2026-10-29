@@ -37,6 +37,7 @@ So the plugin keeps an overlay next to the harness state, `$DSH_HOME/mcp-manager
 |---|---|---|
 | `created` | servers added from the page | row recreated if absent |
 | `overrides` | edits to rows that live in the profile patch | config replaced when it differs |
+| `secrets` | header → credential reference, values never stored | resolved into the live config |
 | `disabled` | rows switched off | `disabled: true` set |
 | `removed` | patch rows hidden by a removal | row removed from the tree |
 
@@ -53,6 +54,20 @@ stayed the same (`mcp-<name>`), and the tool call `mysql_query` answered right a
 `reconnect` is carried through untouched — the manager does not edit it, but a migrated row keeps
 its retry policy.
 
+## 3b Where the tokens go
+
+A header value typed on the page never lands in a file the plugin owns. The page sends it once over
+loopback, the Host writes it through the harness `credentials` service, and the overlay keeps only
+`{ "Authorization": "MCP_<SERVER>_AUTHORIZATION" }`. At start the Host resolves each reference and
+merges the value into the row config it hands to the loader — the config lives in process memory,
+so the value is nowhere on disk except the credential store the Models page also uses.
+
+Values left in the overlay by an earlier version move automatically: on the first start after the
+change, `migrateSecrets()` writes each one to the store, deletes it from the row config and saves
+the binding. Verified on this profile: seven rows migrated (three `Sealed` blobs, four bearer
+tokens), the overlay came out free of both strings, and the `mysql-prod` tool call that needs its
+bearer header still answered.
+
 ## 4 Security
 
 The write routes listen on the plugin's own loopback origin without authentication. That is why
@@ -65,9 +80,11 @@ they are narrow by construction:
 - `stdio` rows spawn a command, so `allowStdio` is `false` by default and the transport is refused
   until an operator turns it on.
 
-Known gap: tokens are stored in plain text — in the overlay file for created rows, in the profile
-patch for hand-written ones. Removing that needs a connection layer of our own with the token in
-the `credentials` service; recorded as the next step.
+Header values do not reach the browser: the list reports the header name and whether a value is
+stored. They do not reach the profile patch either — the plugin never writes it.
+
+The one place a value is readable is the harness credential store itself, which is the same place
+every model key lives (`$DSH_HOME/.credentials.yaml`, mode 0600).
 
 ## 5 Verification (2026-10-29)
 
@@ -82,6 +99,8 @@ the `credentials` service; recorded as the next step.
 | probe, refusal | MCP daemon on port 3015 | `HTTP 401` with the server's message |
 | probe, already connected | playwright MCP on port 3016 | reported as connected, not as an error |
 | page registration | `Slots.listSubTree` on `settings.plugins.tab` | `mcp-manager`, order 40, active |
+| secrets moved | overlay after the migration | seven bindings, no `Sealed`/`Bearer` strings left in the file, seven `MCP_*` credentials in the store |
+| secrets still work | `mysql_query` through `mcp__mysql-prod__*` | answered, so the header was materialized at run time |
 | pixels | not inspected | the GUI index needs a per-process token; verification went through the API and the slot tree |
 
 ## 6 Pitfalls
