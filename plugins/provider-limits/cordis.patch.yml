@@ -1,0 +1,7 @@
+# Bundle layer: one plugin row. An empty config means defaults (public API addresses and
+# environment variable names, no keys). Override in ~/.dsh/profiles/<profile>/cordis.patch.yml
+# by targeting this id.
+- insert:
+    - id: provider-limits
+      name: 'dsh-provider-limits'
+      config: {}
