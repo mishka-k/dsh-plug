@@ -1,0 +1,7 @@
+# Bundle layer: registers one more web search provider. Selecting it is a separate, explicit step
+# in the profile patch (`web.searchProvider: deepseek-account`), so installing the bundle changes
+# nothing until the operator asks for it.
+- insert:
+    - id: web-search-account
+      name: 'dsh-web-search-account'
+      config: {}

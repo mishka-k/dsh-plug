@@ -10,6 +10,7 @@ then shows up in Settings → Plugins next to the shipped ones.
 |---|---|
 | [provider-limits](plugins/provider-limits/) | Provider quotas and account balance as pills under the composer — next to cache hit, tok/s and the context meter |
 | [mcp-manager](plugins/mcp-manager/) | Add, edit, test, enable and remove MCP servers from Settings, without editing the profile patch |
+| [web-search-account](plugins/web-search-account/) | Web search on the signed-in DeepSeek account token, whatever model the session runs |
 
 ## Install
 

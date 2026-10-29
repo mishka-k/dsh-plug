@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Web search on the account",
+    "description": "Adds a web search provider that authenticates with the signed-in DeepSeek account, so search works on any model."
+  }
+}
