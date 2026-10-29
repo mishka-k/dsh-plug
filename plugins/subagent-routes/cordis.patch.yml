@@ -1,0 +1,6 @@
+# Bundle layer: one host row. It fills the model-selection policy for sessions that DSH itself
+# leaves without one (anything resumed rather than freshly created).
+- insert:
+    - id: subagent-routes
+      name: 'dsh-subagent-routes'
+      config: {}

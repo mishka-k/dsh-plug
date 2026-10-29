@@ -17,6 +17,10 @@ duplicated here.
 - [web-search-account](wiki/plugins/web-search-account.md) — провайдер веб-поиска на токене
   аккаунта DeepSeek: работает на любой модели, выбор через `web.searchProvider`; 29.10.
 
+- [subagent-routes](wiki/plugins/subagent-routes.md) — выбор провайдера и модели для субагентов:
+  политика выдаётся любой сессии, вкладка группирует маршруты по провайдеру; усилие живёт отдельно,
+  в строке инструмента; 29.10.
+
 ## DSH mechanics
 
 - [Composer dock slot](wiki/harness/composer-dock.md) — `conversation.composer.dock`: the list of
