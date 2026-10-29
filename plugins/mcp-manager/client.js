@@ -42,7 +42,13 @@ window.__ModuleLoader__.load({
       stdio: 'Command (stdio)',
       url: 'URL',
       headers: 'Headers',
-      headersHint: 'one "Key: Value" per line, for example Authorization: Bearer …',
+      headersHint: 'one "Key: Value" per line; anything secret belongs in the field below',
+      secretHeader: 'Secret header',
+      secretValue: 'Header value',
+      secretHint:
+        'stored outside the config, in the harness credential store; the profile patch and this plugin never keep the value. Leave empty to keep the current one',
+      secretSet: 'value stored',
+      secretMissing: 'no value stored',
       command: 'Command',
       args: 'Arguments',
       argsHint: 'one per line',
@@ -127,7 +133,18 @@ window.__ModuleLoader__.load({
 
     /** @returns the empty draft of one server. */
     function emptyDraft() {
-      return { id: '', serverName: '', transport: 'streamable-http', url: '', headers: '', command: '', args: '', cwd: '' }
+      return {
+        id: '',
+        serverName: '',
+        transport: 'streamable-http',
+        url: '',
+        headers: '',
+        secretHeader: 'Authorization',
+        secretValue: '',
+        command: '',
+        args: '',
+        cwd: '',
+      }
     }
 
     /** @returns a draft filled from a listed server (headers only as key names — values stay on the Host). */
@@ -138,6 +155,8 @@ window.__ModuleLoader__.load({
         transport: server.transport,
         url: server.url ?? '',
         headers: '',
+        secretHeader: Array.isArray(server.secrets) && server.secrets.length > 0 ? server.secrets[0].header : 'Authorization',
+        secretValue: '',
         command: server.command ?? '',
         args: (server.args ?? []).join('\n'),
         cwd: '',
@@ -161,6 +180,10 @@ window.__ModuleLoader__.load({
       } else {
         body.url = draft.url.trim()
         if (draft.headers.trim() !== '') body.headers = draft.headers
+        if (draft.secretValue !== '') {
+          body.secretHeader = draft.secretHeader.trim() === '' ? 'Authorization' : draft.secretHeader.trim()
+          body.secretValue = draft.secretValue
+        }
       }
       return body
     }
@@ -320,6 +343,9 @@ window.__ModuleLoader__.load({
                               server.transport === 'stdio' ? server.command : server.url,
                               server.enabled ? (server.active ? t('active') : t('inactive')) : t('disabled'),
                               server.tools > 0 ? t('tools', { count: server.tools }) : null,
+                              Array.isArray(server.secrets) && server.secrets.length > 0
+                                ? `${server.secrets[0].header}: ${t(server.secrets[0].set ? 'secretSet' : 'secretMissing')}`
+                                : null,
                             ]
                               .filter(Boolean)
                               .join(' · '),
@@ -457,6 +483,29 @@ window.__ModuleLoader__.load({
                         onChange: (event) => edit({ headers: event.target.value }),
                       }),
                       h('span', { key: 'hh', className: 'dshm_hint' }, t('headersHint')),
+                      h('label', { key: 'sl', className: 'dshm_label', htmlFor: 'dshm-secret-header' }, t('secretHeader')),
+                      h('div', { key: 'sv', style: { display: 'flex', gap: '8px' } }, [
+                        h('input', {
+                          key: 'h',
+                          id: 'dshm-secret-header',
+                          className: 'dshm_input',
+                          style: { maxWidth: '180px' },
+                          value: draft.secretHeader,
+                          disabled: busy,
+                          onChange: (event) => edit({ secretHeader: event.target.value }),
+                        }),
+                        h('input', {
+                          key: 'v',
+                          className: 'dshm_input',
+                          type: 'password',
+                          autoComplete: 'off',
+                          placeholder: draft.id === '' ? '' : '•••••',
+                          value: draft.secretValue,
+                          disabled: busy,
+                          onChange: (event) => edit({ secretValue: event.target.value }),
+                        }),
+                      ]),
+                      h('span', { key: 'sh', className: 'dshm_hint' }, t('secretHint')),
                     ],
 
                 h(

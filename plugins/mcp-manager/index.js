@@ -75,27 +75,27 @@ export function apply(ctx, config = {}) {
       const path = url.pathname.slice(ROUTE.length) || '/'
       try {
         if (request.method === 'GET' && path === '/servers') {
-          await reply(response, page())
+          await reply(response, await page())
           return
         }
         if (request.method === 'POST' && path === '/servers') {
           await upsert(await json(request))
-          await reply(response, page())
+          await reply(response, await page())
           return
         }
         if (request.method === 'PUT' && path === '/servers/enabled') {
           await setEnabled(await json(request))
-          await reply(response, page())
+          await reply(response, await page())
           return
         }
         if (request.method === 'DELETE' && path === '/servers') {
           await remove(url.searchParams.get('id'))
-          await reply(response, page())
+          await reply(response, await page())
           return
         }
         if (request.method === 'POST' && path === '/restore') {
           await restore(await json(request))
-          await reply(response, page())
+          await reply(response, await page())
           return
         }
         if (request.method === 'POST' && path === '/probe') {
@@ -117,11 +117,10 @@ export function apply(ctx, config = {}) {
   // Patch rows mount around this plugin, so the overlay is applied on a later tick and again
   // whenever the page asks for the list.
   const timer = setTimeout(() => {
-    try {
-      reconcile()
-    } catch (error) {
+    migrateSecrets()
+    reconcile().catch((error) => {
       console.error('[mcp-manager] reconcile failed:', message(error))
-    }
+    })
   }, RECONCILE_DELAY_MS)
   ctx.effect(() => () => clearTimeout(timer), 'mcp-manager: reconcile timer')
 
@@ -142,23 +141,22 @@ export function apply(ctx, config = {}) {
   }
 
   /** @returns the page payload. */
-  function page() {
+  async function page() {
     return {
-      servers: listServers(),
+      servers: await listServers(),
       allowStdio: settings.allowStdio,
       hidden: Object.keys(state.removed),
     }
   }
 
   /** @returns the page view of every managed row. */
-  function listServers() {
-    return rows()
-      .map(view)
-      .sort((left, right) => String(left.serverName).localeCompare(String(right.serverName)))
+  async function listServers() {
+    const views = await Promise.all(rows().map((entry) => view(entry)))
+    return views.sort((left, right) => String(left.serverName).localeCompare(String(right.serverName)))
   }
 
   /** @returns the page view of one row. */
-  function view(entry) {
+  async function view(entry) {
     const row = entry.options ?? {}
     const rowConfig = row.config ?? {}
     const serverName = typeof rowConfig.serverName === 'string' ? rowConfig.serverName : row.id
@@ -170,6 +168,7 @@ export function apply(ctx, config = {}) {
       command: typeof rowConfig.command === 'string' ? rowConfig.command : null,
       args: Array.isArray(rowConfig.args) ? rowConfig.args : [],
       headers: Object.keys(rowConfig.headers ?? {}),
+      secrets: await secretView(row.id),
       origin: state.created[row.id] === undefined ? 'patch' : 'plugin',
       enabled: row.disabled !== true,
       active: entry.fiber !== undefined && entry.fiber !== null,
@@ -199,11 +198,12 @@ export function apply(ctx, config = {}) {
    * Bring the live tree in line with the overlay: create owned rows, apply edits, switches and
    * removals. Safe to call repeatedly.
    */
-  function reconcile() {
+  async function reconcile() {
     const service = loader()
     for (const [id, rowConfig] of Object.entries(state.created)) {
       if (rows().some((entry) => entry.options.id === id)) continue
-      void service.create({ id, name: MCP_MODULE, config: rowConfig }).catch((error) => {
+      const config = await materialize(rowConfig, state.secrets[id])
+      void service.create({ id, name: MCP_MODULE, config }).catch((error) => {
         console.error(`[mcp-manager] could not create ${id}:`, message(error))
       })
     }
@@ -215,7 +215,10 @@ export function apply(ctx, config = {}) {
       }
       const patch = {}
       const override = state.overrides[id]
-      if (override !== undefined && !sameConfig(entry.options.config, override)) patch.config = override
+      if (override !== undefined) {
+        const desired = await materialize(override, state.secrets[id])
+        if (!sameConfig(entry.options.config, desired)) patch.config = desired
+      }
       const wantedDisabled = state.disabled[id] === true
       if ((entry.options.disabled === true) !== wantedDisabled) patch.disabled = wantedDisabled
       if (Object.keys(patch).length === 0) continue
@@ -252,29 +255,45 @@ export function apply(ctx, config = {}) {
     const reconnect = normalizeReconnect(record.reconnect)
     if (reconnect !== undefined) rowConfig.reconnect = reconnect
 
+    const secretHeader =
+      typeof record.secretHeader === 'string' && record.secretHeader.trim() !== ''
+        ? record.secretHeader.trim()
+        : 'Authorization'
+    const secretValue = typeof record.secretValue === 'string' ? record.secretValue : ''
+
     const requestedId = typeof record.id === 'string' && record.id !== '' ? record.id : undefined
     const existing = requestedId === undefined ? undefined : rows().find((entry) => entry.options.id === requestedId)
     if (existing !== undefined) {
       const id = existing.options.id
-      // The page never receives header values, so an empty field on an existing server means
-      // "keep the headers that are already configured", not "drop them".
-      if (transport === 'streamable-http' && rowConfig.headers === undefined) {
-        const current = existing.options.config?.headers
-        if (current !== undefined) rowConfig.headers = current
+      // A header value from the page is stored, never kept in the row config.
+      if (secretValue !== '') {
+        const keyRef = keyRefFor(serverName, secretHeader)
+        await storeSecret(keyRef, secretValue)
+        state.secrets[id] = { ...bindingsOf(id), [secretHeader]: keyRef }
+        if (rowConfig.headers !== undefined) delete rowConfig.headers[secretHeader]
       }
       if (state.created[id] !== undefined) state.created[id] = rowConfig
       else state.overrides[id] = rowConfig
       delete state.removed[id]
       saveState(state)
-      await loader().update(id, { config: rowConfig, disabled: state.disabled[id] === true })
+      await loader().update(id, {
+        config: await materialize(rowConfig, state.secrets[id]),
+        disabled: state.disabled[id] === true,
+      })
       return
     }
     const id = nextId(serverName)
     state.created[id] = rowConfig
     delete state.disabled[id]
     delete state.removed[id]
+    if (secretValue !== '') {
+      const keyRef = keyRefFor(serverName, secretHeader)
+      await storeSecret(keyRef, secretValue)
+      state.secrets[id] = { ...bindingsOf(id), [secretHeader]: keyRef }
+      if (rowConfig.headers !== undefined) delete rowConfig.headers[secretHeader]
+    }
     saveState(state)
-    await loader().create({ id, name: MCP_MODULE, config: rowConfig })
+    await loader().create({ id, name: MCP_MODULE, config: await materialize(rowConfig, state.secrets[id]) })
   }
 
   /**
@@ -320,7 +339,7 @@ export function apply(ctx, config = {}) {
     const ids = typeof record.id === 'string' && record.id !== '' ? [record.id] : Object.keys(state.removed)
     for (const id of ids) delete state.removed[id]
     saveState(state)
-    reconcile()
+    await reconcile()
   }
 
   /** @returns the managed row with this id, or throws a 400. */
@@ -339,6 +358,95 @@ export function apply(ctx, config = {}) {
     let index = 2
     while (taken.has(`${base}-${index}`) || state.created[`${base}-${index}`] !== undefined) index += 1
     return `${base}-${index}`
+  }
+
+  /** @returns the credentials service, or undefined when this profile exposes none. */
+  function credentials() {
+    const service = ctx.get('credentials')
+    return service === undefined || service === null ? undefined : service
+  }
+
+  /** @returns a stored credential value, or undefined when it is unset or the store is missing. */
+  async function resolveSecret(keyRef) {
+    const service = credentials()
+    if (service === undefined || typeof keyRef !== 'string' || keyRef === '') return undefined
+    try {
+      const resolved = await service.resolve(keyRef)
+      const value = resolved?.value
+      return typeof value === 'string' && value !== '' ? value : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** @returns the header → credential bindings of one row. */
+  function bindingsOf(rowId) {
+    const bindings = state.secrets[rowId]
+    return bindings !== null && typeof bindings === 'object' && !Array.isArray(bindings) ? bindings : {}
+  }
+
+  /** @returns the page view of a row's bindings: header names and whether a value is stored. */
+  async function secretView(rowId) {
+    const view = []
+    for (const [header, keyRef] of Object.entries(bindingsOf(rowId))) {
+      view.push({ header, keyRef, set: (await resolveSecret(keyRef)) !== undefined })
+    }
+    return view
+  }
+
+  /**
+   * @param rowConfig - stored row config, without secret header values.
+   * @param bindings - header → credential references.
+   * @returns the config the loader should see, with the values pulled from the store at this
+   *   moment — they live in process memory only and never reach the overlay or the patch.
+   */
+  async function materialize(rowConfig, bindings) {
+    if (rowConfig === null || rowConfig === undefined) return rowConfig
+    const entries = Object.entries(bindings ?? {})
+    if (entries.length === 0) return rowConfig
+    const headers = { ...(rowConfig.headers ?? {}) }
+    for (const [header, keyRef] of entries) {
+      const value = await resolveSecret(keyRef)
+      if (value !== undefined) headers[header] = value
+    }
+    return { ...rowConfig, headers }
+  }
+
+  /** Write one secret through the credentials service. */
+  async function storeSecret(keyRef, value) {
+    const service = credentials()
+    if (service === undefined) throw new BadRequest('the credentials service is unavailable')
+    await service.set(keyRef, value)
+  }
+
+  /**
+   * One-time housekeeping: header values that still sit in the overlay move into the credential
+   * store, and the overlay keeps only the reference. Idempotent.
+   */
+  async function migrateSecrets() {
+    let changed = false
+    for (const bucket of ['created', 'overrides']) {
+      for (const [id, rowConfig] of Object.entries(state[bucket])) {
+        const headers = rowConfig?.headers
+        if (headers === null || typeof headers !== 'object') continue
+        const bindings = { ...bindingsOf(id) }
+        for (const [header, value] of Object.entries(headers)) {
+          if (typeof value !== 'string' || value === '') continue
+          const keyRef = keyRefFor(rowConfig.serverName ?? id, header)
+          try {
+            if ((await resolveSecret(keyRef)) === undefined) await storeSecret(keyRef, value)
+          } catch (error) {
+            console.error(`[mcp-manager] could not move ${header} of ${id} to credentials:`, message(error))
+            continue
+          }
+          bindings[header] = keyRef
+          delete headers[header]
+          changed = true
+        }
+        if (Object.keys(bindings).length > 0) state.secrets[id] = bindings
+      }
+    }
+    if (changed) saveState(state)
   }
 
   /**
@@ -423,7 +531,7 @@ class BadRequest extends Error {}
 
 /** @returns the overlay, empty when the file is missing or broken. */
 function readState() {
-  const empty = { created: {}, overrides: {}, disabled: {}, removed: {} }
+  const empty = { created: {}, overrides: {}, disabled: {}, removed: {}, secrets: {} }
   try {
     const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
     return {
@@ -431,6 +539,7 @@ function readState() {
       overrides: asRecord(raw?.overrides),
       disabled: asRecord(raw?.disabled),
       removed: asRecord(raw?.removed),
+      secrets: asRecord(raw?.secrets),
     }
   } catch {
     return empty
@@ -443,6 +552,17 @@ function saveState(state) {
   const temp = `${STATE_FILE}.tmp`
   writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
   renameSync(temp, STATE_FILE)
+}
+
+/**
+ * @param serverName - MCP server name.
+ * @param header - header whose value is stored.
+ * @returns the credential reference, e.g. `MCP_BITRIX24_AUTHORIZATION`.
+ */
+function keyRefFor(serverName, header) {
+  const server = String(serverName ?? '').replace(/[^a-z0-9]+/gi, '_').toUpperCase()
+  const name = String(header ?? '').replace(/[^a-z0-9]+/gi, '_').toUpperCase()
+  return `MCP_${server}_${name}`.replace(/_+/g, '_')
 }
 
 /** @returns whether two row configs describe the same server. */
